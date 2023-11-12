@@ -2,11 +2,13 @@
 // PROGRESSING...
 
 #include "voronoi.h"
+#include <memory>
 #include <cmath>
 #include <list>
 #include <algorithm>
 #include <queue>
 #include <map>
+#include <set>
 
 /*
 Fortune's algorithm
@@ -59,8 +61,7 @@ edge-intersection event
 
 namespace onart{
 
-    void VoronoiDiagram::calculate(){
-        // sturctures only used in here
+    // sturctures only used in here
         struct event{
             enum { SITE = 0, INTERSECT = 1 } type;
             union{
@@ -74,32 +75,102 @@ namespace onart{
         struct beachline{
             struct ray{
                 vec2 origin;
-                vec2 direction;
+                vec2 direction; // invalid if this is zero vector
                 inline real x(real y){ // y: current sweepline pos
                     real dy = y - origin.y;
                     return origin.x + dy * direction.x;
                 }
             };
-            std::vector<uint32_t> parabolaFocuses;
-            std::vector<ray> rays;
-            // edge 들어갈 자리를 리턴
-            inline int bisect(const vec2& xy){
-                if(rays.empty()){ return 0; }
-                return bisect(xy, 0, rays.size() - 1);
+            struct parabola {
+                vec2 focus;
+                uint32_t focusIndex;
+                mutable std::shared_ptr<ray> eleft, eright;
+                mutable real y;
+                mutable real lowx, highx;
+                inline bool operator<(const parabola& p) const {
+                    updatey(std::max(y, p.y));
+                    return lowx < p.lowx;
+                }
+                private:
+                inline void updatey(real s) const {
+                    if(y == s) return;
+                    lowx = eleft ? beachline::findx(focus, s, *eleft) : real(0.0);
+                    highx = eright ? beachline::findx(focus, s, *eright) : real(1.0);
+                }
+            };
+
+            const std::vector<vec2>& sites;
+            const real& ycontext;
+
+            inline auto insertSite(uint32_t id){
+                parabola newp;
+                newp.focusIndex = id;
+                newp.focus = sites[id];
+                newp.y = ycontext;
+                newp.lowx = newp.highx = newp.focus.x;
+                if(fronts.empty()) { 
+                    return fronts.insert(newp).first;
+                }
+                auto it = fronts.upper_bound(newp);
+                it = std::prev(it);
+                vec2 intersection;
+                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = 4(b-c)(y-c)
+                // a = it->focus.x, b = it->focus.y, c = newp.focus.y
+                intersection.x = newp.focus.x;
+                intersection.y = 
+                    (newp.focus.x - it->focus.x) * (newp.focus.x - it->focus.x) 
+                    / (real(4.0) * (it->focus.y - newp.focus.y)) 
+                    + newp.focus.y;
+                // slope = (x - a) / (2(b-c))
+                real slope = real(2.0) * (intersection.x - it->focus.x) / (real(4.0) * (it->focus.y - newp.focus.y));
+                newp.eleft = std::make_shared<ray>();
+                newp.eright = std::make_shared<ray>();
+                newp.eleft->origin = newp.eright->origin = intersection;
+                if(it->focus.y != newp.focus.y){
+                    newp.eleft->direction = vec2{real(-1.0), -slope};
+                    newp.eright->direction = vec2{real(1.0), slope};
+                }
+                else{ // (almost)equal site y's -> slope vertical
+                    newp.eleft->direction = vec2{0, 1};
+                    newp.eright->direction = vec2{0, 1};
+                }
+                parabola splitp(*it);
+                it->highx = newp.lowx;
+                std::shared_ptr<ray> oldRight = it->eright;
+                it->eright = newp.eleft;
+                splitp.eleft = newp.eright;
+                splitp.eright = oldRight;
+                fronts.insert(splitp);
+                return fronts.insert(newp).first;
             }
+
+            inline beachline(const std::vector<vec2>& sites, const real& y):sites(sites),ycontext(y){}
+
+            std::set<parabola> fronts;
         private:
-            inline int bisect(const vec2& xy, int begin, int end){
-                if(begin == end) { return begin; }
-                int mid = begin + end / 2;
-                if(xy.x > rays[mid].x(xy.y)){
-                    return bisect(xy, mid + 1, end);
-                }
-                else{ // TODO: ==인 경우 0으로 나누기가 생김
-                    return bisect(xy, begin, mid - 1);
-                }
+            inline static real findx(const vec2& focus, real directrixY, const ray& r) {
+                if(r.direction.x == real(0.0)) { return r.origin.x; } // vertical
+                // else r.direction.x is +1 or -1, meaning x range is greater or less than origin x respectively
+
+                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = 4(b-c)(y-c)
+                // a = focus.x, b = focus.y, c = directrixY
+                // origin (d,e), direction (1,f) ray: y - e = f(x - d) (x >= d)
+                // origin (d,e), direction (-1,-f) ray: y - e = f(x - d) (x <= d)
+                // d = r.origin.x, e = r.origin.y,  f = r.direction.y * r.direction.x
+
+                // intersection eq: (x-a)^2 / (4b-4c) + c = fx - fd + e
+                real slope = r.direction.y * r.direction.x;
+                real coef2 = real(1.0) / (real(4.0) * (focus.y - directrixY));
+                real coef1 = real(2.0) * focus.x / (real(4.0) * (focus.y - directrixY)) - slope;
+                real constant = focus.x * focus.x / (real(4.0) * (focus.y - directrixY)) - slope * r.origin.x + r.origin.y;
+                real rootp1 = -coef1 / (real(2.0) * focus.x);
+                real rootp2 = std::sqrt((focus.y * focus.y) - real(4.0) * focus.x * directrixY) / (real(2.0) * focus.x); // voronoi: there would always be root(s) -> always non negative
+                //rootp1 + rootp2 or rootp1 - rootp2
+                return rootp1 + rootp2 * r.direction.x;
             }
         };
 
+    void VoronoiDiagram::calculate(){
         // for when reused
         areaV.clear();
         areaE.clear();
@@ -108,8 +179,10 @@ namespace onart{
         std::vector<std::vector<uint32_t>> areas(sites.size()); // for areaV's locality in GPU
         areaE.resize(sites.size());
 
+        real y(0.0);
+
         std::priority_queue<event> evs;
-        beachline diag;
+        beachline diag(sites, y);
 
         for(uint32_t i=0;i<sites.size();i++){
             event ev;
@@ -123,30 +196,12 @@ namespace onart{
         while(!evs.empty()){
             auto ev = evs.top(); evs.pop();
             if(ev.type == event::SITE){
-                // new parabola
-                vec2 site = sites[ev.site];
-                int pos = diag.bisect(site);
-                vec2 originalFocus = sites[diag.parabolaFocuses[pos]];
-                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = 4(b-c)(y-c)
-                // a = originalFocus.x, b = originalFocus.y, c = site.y
-                vec2 intersection;
-                intersection.x = site.x;
-                intersection.y = 
-                    (site.x - originalFocus.x) * (site.x - originalFocus.x) 
-                    / (real(4.0) * (originalFocus.y - site.y)) 
-                    + site.y;
-                // slope = (x - a) / (2(b-c))
-                real slope = real(2.0) * (intersection.x - originalFocus.x) / (real(4.0) * (originalFocus.y - site.y));
-                beachline::ray ray0, ray1;
-                ray0.origin = ray1.origin = intersection;
-                if(originalFocus.y != site.y){
-                    ray0.direction = vec2{-1.0f, slope};
-                    ray1.direction = vec2{1.0f, slope};
-                }
-                else{ // (almost)equal site y's -> slope vertical
-
-                }
-                diag.rays.insert(diag.rays.cbegin() + pos, {});
+                auto it = diag.insertSite(ev.site);
+                if(it == diag.fronts.begin()) continue; // size == 1
+                auto prev = std::prev(it);
+                // check intersection of prev->eleft and it->eleft
+                auto next = std::next(it);
+                // check intersection of next->eright and it->eright
             }
             else{
                 
