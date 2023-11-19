@@ -296,5 +296,6 @@ namespace onart{
             }
         }
         // process remainings in beachline
+        // need to pre or postprocess for vertices out of bounds
     }
 }
