@@ -61,24 +61,33 @@ edge-intersection event
 
 namespace onart{
 
-    // sturctures only used in here
-        struct event{
-            enum { SITE = 0, INTERSECT = 1 } type;
-            union{
-                int32_t site;
-            };
-            real t;
-            inline bool operator<(const event& r){ return t < r.t; }
-            inline event(){};
-        };
+        inline real distance(const vec2& a, const vec2& b){
+            return std::sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y));
+        }
 
         struct beachline{
             struct ray{
                 vec2 origin;
-                vec2 direction; // invalid if this is zero vector
+                vec2 direction;
                 inline real x(real y){ // y: current sweepline pos
                     real dy = y - origin.y;
                     return origin.x + dy * direction.x;
+                }
+                inline real intersectT(const ray& other){
+                    if(direction.x == real(0.0)) {
+                        if(other.direction.x == real(0.0)) return real(-1.0);
+                        real rooty = (origin.x - other.origin.x) * other.direction.x;
+                        return (rooty - origin.y) * direction.y; // diretion.y always 1 or -1
+                    }
+                    // origin (d,e), direction (1,f) ray: y - e = f(x - d) (x >= d)
+                    // origin (d,e), direction (-1,-f) ray: y - e = f(x - d) (x <= d)
+                    // d = r.origin.x, e = r.origin.y,  f = r.direction.y * r.direction.x
+                    real d1 = origin.x, d2 = other.origin.x;
+                    real e1 = origin.y, e2 = other.origin.y;
+                    real f1 = direction.x * direction.y, f2 = other.direction.x * other.direction.y;
+                    if(f1 == f2) return real(-1.0);
+                    real rootx = (e2 - e1 + f1 * d1 - f2 * d2) / (f1 - f2);
+                    return (rootx - origin.x) * direction.x;
                 }
             };
             struct parabola {
@@ -131,8 +140,8 @@ namespace onart{
                     newp.eright->direction = vec2{real(1.0), slope};
                 }
                 else{ // (almost)equal site y's -> slope vertical
-                    newp.eleft->direction = vec2{0, 1};
-                    newp.eright->direction = vec2{0, 1};
+                    newp.eleft->direction = vec2{0, -1};
+                    newp.eright->direction = vec2{0, -1};
                 }
                 parabola splitp(*it);
                 it->highx = newp.lowx;
@@ -142,6 +151,30 @@ namespace onart{
                 splitp.eright = oldRight;
                 fronts.insert(splitp);
                 return fronts.insert(newp).first;
+            }
+
+            inline void eraseArc(std::set<parabola>::iterator& it){
+                fronts.erase(it);
+            }
+
+            inline static ray verticalBisector(const vec2& p1, const vec2& p2, const vec2& origin){
+                // downwards: y >= 0
+                ray ret;
+                ret.origin = origin;
+                ret.direction.x = p1.y-p2.y;
+                ret.direction.y = p2.x-p1.x;
+                if(ret.direction.x == real(0.0)){
+                    ret.direction.y = real(1.0);
+                }
+                else{
+                    ret.direction.x = real(1.0);
+                    ret.direction.y /= ret.direction.x;
+                    if(ret.direction.y < 0){
+                        ret.direction.x = -ret.direction.x;
+                        ret.direction.y = -ret.direction.y;
+                    }
+                }
+                return ret;
             }
 
             inline beachline(const std::vector<vec2>& sites, const real& y):sites(sites),ycontext(y){}
@@ -170,6 +203,24 @@ namespace onart{
             }
         };
 
+        struct event{
+            enum { SITE = 0, INTERSECT = 1 } type;
+            union{
+                int32_t site;
+                struct{
+                    std::set<beachline::parabola>::iterator intersection;
+                    vec2 vert;
+                };
+            };
+            real t;
+            inline bool operator<(const event& r){ return t < r.t; }
+            inline event(){};
+            inline event(const event& e){
+                std::memcpy(this,&e,sizeof(event));
+            }
+            inline ~event(){}
+        };
+
     void VoronoiDiagram::calculate(){
         // for when reused
         areaV.clear();
@@ -194,18 +245,56 @@ namespace onart{
 
         // process start
         while(!evs.empty()){
-            auto ev = evs.top(); evs.pop();
+            auto ev = evs.top(); evs.pop(); // top can be changed when pushing (same y) -> pop immediately
             if(ev.type == event::SITE){
                 auto it = diag.insertSite(ev.site);
                 if(it == diag.fronts.begin()) continue; // size == 1
                 auto prev = std::prev(it);
-                // check intersection of prev->eleft and it->eleft
+                if(prev->eleft){
+                    real intersectT = it->eleft->intersectT(*prev->eleft);
+                    if(intersectT >= 0){
+                        vec2 vert = {
+                            it->eleft->origin.x + it->eleft->direction.x * intersectT,
+                            it->eleft->origin.y + it->eleft->direction.y * intersectT
+                        };
+                        event iev;
+                        iev.type = event::INTERSECT;
+                        iev.t = vert.y + distance(vert,it->focus);
+                        iev.intersection = prev;
+                        iev.vert = vert;
+                        evs.push(iev);
+                    }
+                }
                 auto next = std::next(it);
-                // check intersection of next->eright and it->eright
+                if(next->eright){
+                    real intersectT = it->eright->intersectT(*next->eright);
+                    if(intersectT >= 0) {
+                        vec2 vert = {
+                            it->eright->origin.x + it->eright->direction.x * intersectT,
+                            it->eright->origin.y + it->eright->direction.y * intersectT
+                        };
+                        event iev;
+                        iev.type = event::INTERSECT;
+                        iev.t = vert.y + distance(vert,it->focus);
+                        iev.intersection = next;
+                        iev.vert = vert;
+                        evs.push(iev);
+                    }
+                }
             }
             else{
-                
+                auto prev = std::prev(ev.intersection);
+                auto next = std::next(ev.intersection);
+                beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
+                next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
+                auto index = areaV.size();
+                areaV.push_back(ev.vert);
+                areas[ev.intersection->focusIndex].push_back(index);
+                areas[prev->focusIndex].push_back(index);
+                areas[next->focusIndex].push_back(index);
+                diag.eraseArc(ev.intersection);
             }
         }
+        // process remainings in beachline
     }
 }
