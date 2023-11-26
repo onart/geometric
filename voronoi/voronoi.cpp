@@ -1,6 +1,4 @@
 // PUBLIC DOMAIN.
-// PROGRESSING...
-
 #include "voronoi.h"
 #include <memory>
 #include <cmath>
@@ -61,9 +59,22 @@ edge-intersection event
 
 namespace onart{
 
-        inline real distance(const vec2& a, const vec2& b){
-            return std::sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y));
+        inline real distance2(const vec2& a, const vec2& b){
+            return (a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y);
         }
+
+        inline real distance(const vec2& a, const vec2& b){
+            return std::sqrt(distance2(a, b));
+        }
+
+        inline real ccwDirection(const vec2& site, const vec2& vertex){
+            return std::atan2(vertex.y - site.y, vertex.x - site.x);
+        }
+
+        struct index_t{
+            real ccwdir;
+            uint32_t index;
+        };
 
         struct beachline{
             struct ray{
@@ -88,6 +99,22 @@ namespace onart{
                     if(f1 == f2) return real(-1.0);
                     real rootx = (e2 - e1 + f1 * d1 - f2 * d2) / (f1 - f2);
                     return (rootx - origin.x) * direction.x;
+                }
+                inline vec2 intersectionWithBoundary(){
+                    real t(FLT_MAX);
+                    if(direction.x){
+                        real tx0 = -origin.x / direction.x;
+                        if(tx0 >= real(0.0)) t = tx0;
+                        real tx1 = (1 - origin.x) / direction.x;
+                        if(tx1 >= real(0.0)) t = std::min(t, tx1);
+                    }
+                    if(direction.y){
+                        real ty0 = -origin.y / direction.y;
+                        if(ty0 >= real(0.0)) t = std::min(t, ty0);
+                        real ty1 = (1 - origin.y) / direction.y;
+                        if(ty1 >= real(0.0)) t = std::min(t, ty1);
+                    }
+                    return vec2{origin.x + direction.x * t + origin.y + direction.y * t};
                 }
             };
             struct parabola {
@@ -224,16 +251,24 @@ namespace onart{
     void VoronoiDiagram::calculate(){
         // for when reused
         areaV.clear();
-        areaE.clear();
+        areaI.clear();
         
         std::vector<vec2> verts;
-        std::vector<std::vector<uint32_t>> areas(sites.size()); // for areaV's locality in GPU
-        areaE.resize(sites.size());
+        std::vector<std::vector<index_t>> areas(sites.size()); // for areaV's locality in GPU
+        areaI.resize(sites.size());
+
+        verts.reserve(sites.size());
 
         real y(0.0);
 
         std::priority_queue<event> evs;
         beachline diag(sites, y);
+
+        uint32_t _00CornerOwner = ~0U;
+        uint32_t _01CornerOwner = ~0U;
+        uint32_t _10CornerOwner = ~0U;
+        uint32_t _11CornerOwner = ~0U;
+        real _00dist2 = FLT_MAX, _01dist2 = FLT_MAX, _10dist2 = FLT_MAX, _11dist2 = FLT_MAX;
 
         for(uint32_t i=0;i<sites.size();i++){
             event ev;
@@ -241,7 +276,26 @@ namespace onart{
             ev.site = i;
             ev.t = sites[i].y;
             evs.push(ev);
+            // insert 4 corners
+            real _00 = distance2(sites[i], vec2{0,0});
+            real _01 = distance2(sites[i], vec2{0,1});
+            real _10 = distance2(sites[i], vec2{1,0});
+            real _11 = distance2(sites[i], vec2{1,1});
+            if(_00dist2 > _00){ _00dist2 = _00; _00CornerOwner = i; }
+            if(_01dist2 > _01){ _01dist2 = _01; _01CornerOwner = i; }
+            if(_10dist2 > _10){ _10dist2 = _10; _10CornerOwner = i; }
+            if(_11dist2 > _11){ _11dist2 = _11; _11CornerOwner = i; }
         }
+
+        verts.push_back(vec2{0,0});
+        verts.push_back(vec2{0,1});
+        verts.push_back(vec2{1,0});
+        verts.push_back(vec2{1,1});
+
+        areas[_00CornerOwner].push_back({ccwDirection(sites[_00CornerOwner], vec2{0,0}), 0});
+        areas[_01CornerOwner].push_back({ccwDirection(sites[_01CornerOwner], vec2{0,1}), 1});
+        areas[_10CornerOwner].push_back({ccwDirection(sites[_10CornerOwner], vec2{1,0}), 2});
+        areas[_11CornerOwner].push_back({ccwDirection(sites[_11CornerOwner], vec2{1,1}), 3});
 
         // process start
         while(!evs.empty()){
@@ -287,15 +341,83 @@ namespace onart{
                 auto next = std::next(ev.intersection);
                 beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
                 next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
-                auto index = areaV.size();
-                areaV.push_back(ev.vert);
-                areas[ev.intersection->focusIndex].push_back(index);
-                areas[prev->focusIndex].push_back(index);
-                areas[next->focusIndex].push_back(index);
+                if(ev.vert.x > real(1.0) || ev.vert.x < real(0.0) || ev.vert.y > real(1.0) || ev.vert.y < real(0.0)){
+                    // need to postprocess for vertices out of bounds
+                    vec2 v1 = ev.intersection->eleft->intersectionWithBoundary();
+                    vec2 v2 = ev.intersection->eright->intersectionWithBoundary();
+                    uint32_t index = verts.size();
+                    verts.push_back(v1);
+                    verts.push_back(v2);
+                    ccwDirection(ev.intersection->focus, v1);
+                    areas[ev.intersection->focusIndex].push_back({ccwDirection(ev.intersection->focus, v1), index});
+                    areas[prev->focusIndex].push_back({ccwDirection(prev->focus, v1), index});
+                    areas[ev.intersection->focusIndex].push_back({ccwDirection(ev.intersection->focus, v2), index + 1});
+                    areas[next->focusIndex].push_back({ccwDirection(next->focus, v2), index + 1});
+                }
+                else{
+                    uint32_t index = verts.size();
+                    verts.push_back(ev.vert);
+                    areas[ev.intersection->focusIndex].push_back({ccwDirection(ev.intersection->focus, ev.vert), index});
+                    areas[prev->focusIndex].push_back({ccwDirection(prev->focus, ev.vert), index});
+                    areas[next->focusIndex].push_back({ccwDirection(next->focus, ev.vert), index});
+                }
                 diag.eraseArc(ev.intersection);
             }
         }
         // process remainings in beachline
-        // need to pre or postprocess for vertices out of bounds
+        for(auto it = diag.fronts.begin(); it != diag.fronts.end();){
+            if(auto& ry = it->eright){
+                vec2 vertex = ry->intersectionWithBoundary();
+                auto owner1 = it->focusIndex;
+                auto dir1 = ccwDirection(it->focus, vertex);
+                ++it;
+                auto owner2 = it->focusIndex;
+                auto dir2 = ccwDirection(it->focus, vertex);
+                uint32_t index = verts.size();
+                verts.push_back(ry->intersectionWithBoundary());
+                areas[owner1].push_back({dir1, index});
+                areas[owner2].push_back({dir2, index});
+            }
+            else{
+                ++it; // only for the last one
+            }
+        }
+
+        // vertex locality
+        areaV.reserve(verts.size());
+        std::vector<uint32_t> indexMap(verts.size());
+        for(auto& i: indexMap) { i = ~0u; }
+        int indexIter = 0;
+        int faceIter = 0;
+        for(auto& area: areas){
+            std::sort(area.begin(), area.end());
+            for(const index_t& vpos: area){
+                if(indexMap[vpos.index] == ~0u){
+                    areaV.push_back(verts[vpos.index]);
+                    areaI[faceIter].push_back(indexIter);
+                    indexMap[vpos.index] = indexIter++;
+                }
+                else {
+                    areaI[faceIter].push_back(indexMap[vpos.index]);
+                }
+            }
+            faceIter++;
+        }
+    }
+
+    void VoronoiDiagram::makeVertexPerFace() {
+        std::vector<vec2> newV;
+        std::vector<std::vector<uint32_t>> newI(areaI.size());
+        newV.reserve(areaV.size() * 3);
+        int face = 0;
+        uint32_t vtx = 0;
+        for(auto& area: areaI) {
+            for(uint32_t idx: area){
+                newV.push_back(areaV[area[idx]]);
+                newI[face].push_back(vtx++);
+            }
+        }
+        areaV.swap(newV);
+        areaI.swap(newI);
     }
 }
