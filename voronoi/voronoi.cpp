@@ -74,6 +74,7 @@ namespace onart{
         struct index_t{
             real ccwdir;
             uint32_t index;
+            inline bool operator<(const index_t& rhs) { return ccwdir < rhs.ccwdir; }
         };
 
         struct beachline{
@@ -114,7 +115,7 @@ namespace onart{
                         real ty1 = (1 - origin.y) / direction.y;
                         if(ty1 >= real(0.0)) t = std::min(t, ty1);
                     }
-                    return vec2{origin.x + direction.x * t + origin.y + direction.y * t};
+                    return vec2{origin.x + direction.x * t, origin.y + direction.y * t};
                 }
             };
             struct parabola {
@@ -124,14 +125,16 @@ namespace onart{
                 mutable real y;
                 mutable real lowx, highx;
                 inline bool operator<(const parabola& p) const {
+                    p.updatey(std::max(y, p.y));
                     updatey(std::max(y, p.y));
-                    return lowx < p.lowx;
+                    return (lowx < p.lowx) || (lowx == p.lowx && highx < p.highx);
                 }
                 private:
                 inline void updatey(real s) const {
                     if(y == s) return;
                     lowx = eleft ? beachline::findx(focus, s, *eleft) : real(0.0);
                     highx = eright ? beachline::findx(focus, s, *eright) : real(1.0);
+                    y = s;
                 }
             };
 
@@ -150,15 +153,15 @@ namespace onart{
                 auto it = fronts.upper_bound(newp);
                 it = std::prev(it);
                 vec2 intersection;
-                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = 4(b-c)(y-c)
+                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = (b-c)(2y-b-c)
                 // a = it->focus.x, b = it->focus.y, c = newp.focus.y
                 intersection.x = newp.focus.x;
-                intersection.y = 
-                    (newp.focus.x - it->focus.x) * (newp.focus.x - it->focus.x) 
-                    / (real(4.0) * (it->focus.y - newp.focus.y)) 
-                    + newp.focus.y;
-                // slope = (x - a) / (2(b-c))
-                real slope = real(2.0) * (intersection.x - it->focus.x) / (real(4.0) * (it->focus.y - newp.focus.y));
+                intersection.y =
+                    ((newp.focus.x - it->focus.x) * (newp.focus.x - it->focus.x)
+                    / (it->focus.y - newp.focus.y)
+                    + newp.focus.y + it->focus.y) * real(0.5);
+                // slope = (x - a) / (b - c)
+                real slope = (intersection.x - it->focus.x) / (it->focus.y - newp.focus.y);
                 newp.eleft = std::make_shared<ray>();
                 newp.eright = std::make_shared<ray>();
                 newp.eleft->origin = newp.eright->origin = intersection;
@@ -174,6 +177,7 @@ namespace onart{
                 it->highx = newp.lowx;
                 std::shared_ptr<ray> oldRight = it->eright;
                 it->eright = newp.eleft;
+                splitp.lowx = newp.highx;
                 splitp.eleft = newp.eright;
                 splitp.eright = oldRight;
                 fronts.insert(splitp);
@@ -212,19 +216,19 @@ namespace onart{
                 if(r.direction.x == real(0.0)) { return r.origin.x; } // vertical
                 // else r.direction.x is +1 or -1, meaning x range is greater or less than origin x respectively
 
-                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = 4(b-c)(y-c)
+                // focus (a, b), directrix (y = c) parabola: (x-a)^2 = (b-c)(2y-b-c)
                 // a = focus.x, b = focus.y, c = directrixY
                 // origin (d,e), direction (1,f) ray: y - e = f(x - d) (x >= d)
                 // origin (d,e), direction (-1,-f) ray: y - e = f(x - d) (x <= d)
                 // d = r.origin.x, e = r.origin.y,  f = r.direction.y * r.direction.x
 
-                // intersection eq: (x-a)^2 / (4b-4c) + c = fx - fd + e
+                // intersection eq: ((x-a)^2 / (b-c) + b + c) / 2 = fx - fd + e
                 real slope = r.direction.y * r.direction.x;
-                real coef2 = real(1.0) / (real(4.0) * (focus.y - directrixY));
-                real coef1 = real(2.0) * focus.x / (real(4.0) * (focus.y - directrixY)) - slope;
-                real constant = focus.x * focus.x / (real(4.0) * (focus.y - directrixY)) - slope * r.origin.x + r.origin.y;
-                real rootp1 = -coef1 / (real(2.0) * focus.x);
-                real rootp2 = std::sqrt((focus.y * focus.y) - real(4.0) * focus.x * directrixY) / (real(2.0) * focus.x); // voronoi: there would always be root(s) -> always non negative
+                real coef2 = real(1.0) / (real(2.0) * (focus.y - directrixY));
+                real coef1 = -real(2.0) * focus.x / (real(2.0) * (focus.y - directrixY)) - slope;
+                real constant = focus.x * focus.x / (real(2.0) * (focus.y - directrixY)) + (focus.y + directrixY) * real(0.5) + slope * r.origin.x - r.origin.y;
+                real rootp1 = -coef1 / (real(2.0) * coef2);
+                real rootp2 = std::sqrt((coef1 * coef1) - real(4.0) * coef2 * constant) / (real(2.0) * coef2); // voronoi: there would always be root(s) -> always non negative
                 //rootp1 + rootp2 or rootp1 - rootp2
                 return rootp1 + rootp2 * r.direction.x;
             }
@@ -240,7 +244,9 @@ namespace onart{
                 };
             };
             real t;
-            inline bool operator<(const event& r){ return t < r.t; }
+            inline bool operator<(const event& r) const { return t < r.t; }
+            inline bool operator>(const event& r) const { return t > r.t; }
+            inline event& operator=(const event& r) { std::memcpy(this, &r, sizeof(event));  return *this; }
             inline event(){};
             inline event(const event& e){
                 std::memcpy(this,&e,sizeof(event));
@@ -261,7 +267,7 @@ namespace onart{
 
         real y(0.0);
 
-        std::priority_queue<event> evs;
+        std::priority_queue<event, std::vector<event>, std::greater<event>> evs;
         beachline diag(sites, y);
 
         uint32_t _00CornerOwner = ~0U;
@@ -300,26 +306,29 @@ namespace onart{
         // process start
         while(!evs.empty()){
             auto ev = evs.top(); evs.pop(); // top can be changed when pushing (same y) -> pop immediately
+            y = ev.t;
             if(ev.type == event::SITE){
                 auto it = diag.insertSite(ev.site);
-                if(it == diag.fronts.begin()) continue; // size == 1
-                auto prev = std::prev(it);
-                if(prev->eleft){
-                    real intersectT = it->eleft->intersectT(*prev->eleft);
-                    if(intersectT >= 0){
-                        vec2 vert = {
-                            it->eleft->origin.x + it->eleft->direction.x * intersectT,
-                            it->eleft->origin.y + it->eleft->direction.y * intersectT
-                        };
-                        event iev;
-                        iev.type = event::INTERSECT;
-                        iev.t = vert.y + distance(vert,it->focus);
-                        iev.intersection = prev;
-                        iev.vert = vert;
-                        evs.push(iev);
+                if (it != diag.fronts.begin()) { // size == 1 or same y
+                    auto prev = std::prev(it);
+                    if (prev->eleft) {
+                        real intersectT = it->eleft->intersectT(*prev->eleft);
+                        if (intersectT >= 0) {
+                            vec2 vert = {
+                                it->eleft->origin.x + it->eleft->direction.x * intersectT,
+                                it->eleft->origin.y + it->eleft->direction.y * intersectT
+                            };
+                            event iev;
+                            iev.type = event::INTERSECT;
+                            iev.t = vert.y + distance(vert, it->focus);
+                            iev.intersection = prev;
+                            iev.vert = vert;
+                            evs.push(iev);
+                        }
                     }
                 }
                 auto next = std::next(it);
+                if (next == diag.fronts.end()) continue;
                 if(next->eright){
                     real intersectT = it->eright->intersectT(*next->eright);
                     if(intersectT >= 0) {
@@ -370,12 +379,12 @@ namespace onart{
                 vec2 vertex = ry->intersectionWithBoundary();
                 auto owner1 = it->focusIndex;
                 auto dir1 = ccwDirection(it->focus, vertex);
-                ++it;
+                uint32_t index = verts.size();
+                verts.push_back(vertex);
+                areas[owner1].push_back({ dir1, index });
+                if (++it == diag.fronts.end()) break;
                 auto owner2 = it->focusIndex;
                 auto dir2 = ccwDirection(it->focus, vertex);
-                uint32_t index = verts.size();
-                verts.push_back(ry->intersectionWithBoundary());
-                areas[owner1].push_back({dir1, index});
                 areas[owner2].push_back({dir2, index});
             }
             else{
