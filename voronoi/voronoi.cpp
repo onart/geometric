@@ -48,6 +48,7 @@ site event
 
 edge-intersection event
 - 없어지는 포물선과 만난 반직선(즉 이제는 선분)은 beachline에서 제거
+    사이에 site 첨가 등으로 삽입 당시의 반직선이 이미 다른 것과 만난 경우 없던 일이 됨
     선분이 된 반직선은 끝점이 생기며 이 끝점은 그것이 속한 칸의 꼭짓점에 해당. 그것을 기록
     없어지는 포물선에 인접한 포물선들을 찾아, 사이에 이어지는 간선을 생성
     간선의 방향은 두 포물선의 초점을 이은 선분에 수직하고 아래를 향하는 방향이어야 함
@@ -103,6 +104,9 @@ namespace onart{
                 }
                 inline vec2 intersectionWithBoundary(){
                     real t(FLT_MAX);
+                    if (std::abs(origin.x - real(0.5)) > real(0.5) || std::abs(origin.y - real(0.5)) > real(0.5)) { // starting from outside: need to across the map
+                        
+                    }
                     if(direction.x){
                         real tx0 = -origin.x / direction.x;
                         if(tx0 >= real(0.0)) t = tx0;
@@ -132,8 +136,8 @@ namespace onart{
                 private:
                 inline void updatey(real s) const {
                     if(y == s) return;
-                    lowx = eleft ? beachline::findx(focus, s, *eleft) : real(0.0);
-                    highx = eright ? beachline::findx(focus, s, *eright) : real(1.0);
+                    lowx = eleft ? beachline::findx(focus, s, *eleft) : real(-FLT_MAX);
+                    highx = eright ? beachline::findx(focus, s, *eright) : real(FLT_MAX);
                     y = s;
                 }
             };
@@ -198,8 +202,8 @@ namespace onart{
                     ret.direction.y = real(1.0);
                 }
                 else{
-                    ret.direction.x = real(1.0);
                     ret.direction.y /= ret.direction.x;
+                    ret.direction.x = real(1.0);
                     if(ret.direction.y < 0){
                         ret.direction.x = -ret.direction.x;
                         ret.direction.y = -ret.direction.y;
@@ -228,7 +232,7 @@ namespace onart{
                 real coef1 = -real(2.0) * focus.x / (real(2.0) * (focus.y - directrixY)) - slope;
                 real constant = focus.x * focus.x / (real(2.0) * (focus.y - directrixY)) + (focus.y + directrixY) * real(0.5) + slope * r.origin.x - r.origin.y;
                 real rootp1 = -coef1 / (real(2.0) * coef2);
-                real rootp2 = std::sqrt((coef1 * coef1) - real(4.0) * coef2 * constant) / (real(2.0) * coef2); // voronoi: there would always be root(s) -> always non negative
+                real rootp2 = std::abs(std::sqrt((coef1 * coef1) - real(4.0) * coef2 * constant) / (real(2.0) * coef2)); // voronoi: there would always be root(s) -> determinant always non negative
                 //rootp1 + rootp2 or rootp1 - rootp2
                 return rootp1 + rootp2 * r.direction.x;
             }
@@ -241,6 +245,7 @@ namespace onart{
                 struct{
                     std::set<beachline::parabola>::iterator intersection;
                     vec2 vert;
+                    std::weak_ptr<beachline::ray> leftEdge, rightEdge;
                 };
             };
             real t;
@@ -251,6 +256,7 @@ namespace onart{
             inline event(const event& e){
                 std::memcpy(this,&e,sizeof(event));
             }
+            inline event(decltype(intersection)& it) : intersection(it), leftEdge(it->eleft), rightEdge(it->eright) {}
             inline ~event(){}
         };
 
@@ -318,10 +324,9 @@ namespace onart{
                                 it->eleft->origin.x + it->eleft->direction.x * intersectT,
                                 it->eleft->origin.y + it->eleft->direction.y * intersectT
                             };
-                            event iev;
+                            event iev(prev);
                             iev.type = event::INTERSECT;
                             iev.t = vert.y + distance(vert, it->focus);
-                            iev.intersection = prev;
                             iev.vert = vert;
                             evs.push(iev);
                         }
@@ -336,18 +341,23 @@ namespace onart{
                             it->eright->origin.x + it->eright->direction.x * intersectT,
                             it->eright->origin.y + it->eright->direction.y * intersectT
                         };
-                        event iev;
+                        event iev(next);
                         iev.type = event::INTERSECT;
                         iev.t = vert.y + distance(vert,it->focus);
-                        iev.intersection = next;
                         iev.vert = vert;
                         evs.push(iev);
                     }
                 }
             }
             else{
+                if (ev.leftEdge.expired() || ev.rightEdge.expired()) {
+                    continue;
+                }
                 auto prev = std::prev(ev.intersection);
                 auto next = std::next(ev.intersection);
+                if (prev->eright.get() != ev.leftEdge.lock().get() || next->eleft.get() != ev.rightEdge.lock().get()) {
+                    continue;
+                }
                 beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
                 next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
                 if(ev.vert.x > real(1.0) || ev.vert.x < real(0.0) || ev.vert.y > real(1.0) || ev.vert.y < real(0.0)){
