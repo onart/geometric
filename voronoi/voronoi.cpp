@@ -478,6 +478,7 @@ namespace geom{
                 newV.push_back(areaV[area[idx]]);
                 newI[face].push_back(vtx++);
             }
+            face++;
         }
         areaV.swap(newV);
         areaI.swap(newI);
