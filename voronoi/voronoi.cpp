@@ -395,8 +395,8 @@ namespace geom{
 
                     vec2 borderVert = outward.intersectionWithBoundary();
                     uint32_t index = verts.size();
-                    areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, ev.vert), index });
-                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                    areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, borderVert), index });
+                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, borderVert), index });
                     verts.push_back(borderVert);
                 }
 
@@ -408,8 +408,8 @@ namespace geom{
 
                     vec2 borderVert = outward.intersectionWithBoundary();
                     uint32_t index = verts.size();
-                    areas[next->focusIndex].push_back({ ccwDirection(next->focus, ev.vert), index });
-                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                    areas[next->focusIndex].push_back({ ccwDirection(next->focus, borderVert), index });
+                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, borderVert), index });
                     verts.push_back(borderVert);
                 }
                 beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
