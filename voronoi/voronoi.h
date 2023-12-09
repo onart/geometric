@@ -1,11 +1,10 @@
 #include <vector>
 #include <cstdint>
 
-namespace onart{
+namespace geom{
     using real = float;
     struct vec2{
         real x,y;
-        inline bool operator<(const vec2& other){return y < other.y;}
     };
 
     // 보드의 범위는 [0,1]^2 입니다. (좌측 상단이 (0,0))
