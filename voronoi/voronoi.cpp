@@ -48,7 +48,6 @@ site event
 
 edge-intersection event
 - 없어지는 포물선과 만난 반직선(즉 이제는 선분)은 beachline에서 제거
-    사이에 site 첨가 등으로 삽입 당시의 반직선이 이미 다른 것과 만난 경우 없던 일이 됨
     선분이 된 반직선은 끝점이 생기며 이 끝점은 그것이 속한 칸의 꼭짓점에 해당. 그것을 기록
     없어지는 포물선에 인접한 포물선들을 찾아, 사이에 이어지는 간선을 생성
     간선의 방향은 두 포물선의 초점을 이은 선분에 수직하고 아래를 향하는 방향이어야 함
@@ -58,7 +57,9 @@ edge-intersection event
 영역의 끝을 만날 때까지 확장
 */
 
-namespace onart{
+namespace geom{
+
+        inline bool operator<(const vec2& lhs, const vec2& rhs) { return lhs.y < rhs.y; }
 
         inline real distance2(const vec2& a, const vec2& b){
             return (a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y);
@@ -70,6 +71,10 @@ namespace onart{
 
         inline real ccwDirection(const vec2& site, const vec2& vertex){
             return std::atan2(vertex.y - site.y, vertex.x - site.x);
+        }
+
+        inline bool outside(const vec2& point) {
+            return point.x > real(1.0) || point.x < real(0.0) || point.y > real(1.0) || point.y < real(0.0);
         }
 
         struct index_t{
@@ -104,9 +109,6 @@ namespace onart{
                 }
                 inline vec2 intersectionWithBoundary(){
                     real t(FLT_MAX);
-                    if (std::abs(origin.x - real(0.5)) > real(0.5) || std::abs(origin.y - real(0.5)) > real(0.5)) { // starting from outside: need to across the map
-                        
-                    }
                     if(direction.x){
                         real tx0 = -origin.x / direction.x;
                         if(tx0 >= real(0.0)) t = tx0;
@@ -120,6 +122,32 @@ namespace onart{
                         if(ty1 >= real(0.0)) t = std::min(t, ty1);
                     }
                     return vec2{origin.x + direction.x * t, origin.y + direction.y * t};
+                }
+
+                inline void intersectionsWithBoundary(vec2* points) {
+                    if (direction.x) {
+                        real t = -origin.x / direction.x;
+                        if (t >= real(0.0)) {
+                            *points = { origin.x + direction.x * t, origin.y + direction.y * t };
+                            if (!outside(*points)) { points++; }
+                        }
+                        t = (1 - origin.x) / direction.x;
+                        if (t >= real(0.0)) {
+                            *points = { origin.x + direction.x * t, origin.y + direction.y * t };
+                            if (!outside(*points)) { points++; }
+                        }
+                    }
+                    if (direction.y) {
+                        real t = -origin.y / direction.y;
+                        if (t >= real(0.0)) {
+                            *points = { origin.x + direction.x * t, origin.y + direction.y * t };
+                            if (!outside(*points)) { points++; }
+                        }
+                        t = (1 - origin.y) / direction.y;
+                        if (t >= real(0.0)) {
+                            *points = { origin.x + direction.x * t, origin.y + direction.y * t };
+                        }
+                    }
                 }
             };
             struct parabola {
@@ -358,44 +386,59 @@ namespace onart{
                 if (prev->eright.get() != ev.leftEdge.lock().get() || next->eleft.get() != ev.rightEdge.lock().get()) {
                     continue;
                 }
+                // 3 arcs met -> the vertex is always inside the [0,1]^2 area
+                if (outside(prev->eright->origin)) {
+                    beachline::ray outward;
+                    outward.origin = ev.vert;
+                    outward.direction.x = -prev->eright->direction.x;
+                    outward.direction.y = -prev->eright->direction.y;
+
+                    vec2 borderVert = outward.intersectionWithBoundary();
+                    uint32_t index = verts.size();
+                    areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, ev.vert), index });
+                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                    verts.push_back(borderVert);
+                }
+
+                if (outside(next->eleft->origin)) {
+                    beachline::ray outward;
+                    outward.origin = ev.vert;
+                    outward.direction.x = -next->eleft->direction.x;
+                    outward.direction.y = -next->eleft->direction.y;
+
+                    vec2 borderVert = outward.intersectionWithBoundary();
+                    uint32_t index = verts.size();
+                    areas[next->focusIndex].push_back({ ccwDirection(next->focus, ev.vert), index });
+                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                    verts.push_back(borderVert);
+                }
                 beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
                 next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
-                if(ev.vert.x > real(1.0) || ev.vert.x < real(0.0) || ev.vert.y > real(1.0) || ev.vert.y < real(0.0)){
-                    // need to postprocess for vertices out of bounds
-                    vec2 v1 = ev.intersection->eleft->intersectionWithBoundary();
-                    vec2 v2 = ev.intersection->eright->intersectionWithBoundary();
-                    uint32_t index = verts.size();
-                    verts.push_back(v1);
-                    verts.push_back(v2);
-                    ccwDirection(ev.intersection->focus, v1);
-                    areas[ev.intersection->focusIndex].push_back({ccwDirection(ev.intersection->focus, v1), index});
-                    areas[prev->focusIndex].push_back({ccwDirection(prev->focus, v1), index});
-                    areas[ev.intersection->focusIndex].push_back({ccwDirection(ev.intersection->focus, v2), index + 1});
-                    areas[next->focusIndex].push_back({ccwDirection(next->focus, v2), index + 1});
-                }
-                else{
-                    uint32_t index = verts.size();
-                    verts.push_back(ev.vert);
-                    areas[ev.intersection->focusIndex].push_back({ccwDirection(ev.intersection->focus, ev.vert), index});
-                    areas[prev->focusIndex].push_back({ccwDirection(prev->focus, ev.vert), index});
-                    areas[next->focusIndex].push_back({ccwDirection(next->focus, ev.vert), index});
-                }
+                uint32_t index = verts.size();
+                verts.push_back(ev.vert);
+                areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, ev.vert), index });
+                areas[next->focusIndex].push_back({ ccwDirection(next->focus, ev.vert), index });
                 diag.eraseArc(ev.intersection);
             }
         }
         // process remainings in beachline
         for(auto it = diag.fronts.begin(); it != diag.fronts.end();){
             if(auto& ry = it->eright){
-                vec2 vertex = ry->intersectionWithBoundary();
+                vec2 candids[4]{ {real(-1)},{real(-1)},{real(-1)},{real(-1)} };
+                ry->intersectionsWithBoundary(candids);
+                auto next = std::next(it);
                 auto owner1 = it->focusIndex;
-                auto dir1 = ccwDirection(it->focus, vertex);
-                uint32_t index = verts.size();
-                verts.push_back(vertex);
-                areas[owner1].push_back({ dir1, index });
-                if (++it == diag.fronts.end()) break;
-                auto owner2 = it->focusIndex;
-                auto dir2 = ccwDirection(it->focus, vertex);
-                areas[owner2].push_back({dir2, index});
+                auto owner2 = next->focusIndex;
+                for (int i = 0; i < 4; i++) {
+                    vec2& vertex = candids[i];
+                    if (outside(vertex)) break;
+                    uint32_t index = verts.size();
+                    verts.push_back(vertex);
+                    areas[owner1].push_back({ ccwDirection(it->focus, vertex), index });
+                    areas[owner2].push_back({ ccwDirection(next->focus, vertex), index });
+                }
+                it = next;
             }
             else{
                 ++it; // only for the last one
