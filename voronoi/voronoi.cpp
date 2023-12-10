@@ -396,39 +396,51 @@ namespace geom{
                 if (prev->eright.get() != ev.leftEdge.lock().get() || next->eleft.get() != ev.rightEdge.lock().get()) {
                     continue;
                 }
-                // 3 arcs met -> the vertex is always inside the [0,1]^2 area
-                if (outside(prev->eright->origin)) {
-                    beachline::ray outward;
-                    outward.origin = ev.vert;
-                    outward.direction.x = -prev->eright->direction.x;
-                    outward.direction.y = -prev->eright->direction.y;
-
-                    vec2 borderVert = outward.intersectionWithBoundary();
-                    uint32_t index = verts.size();
-                    areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, borderVert), index });
-                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, borderVert), index });
-                    verts.push_back(borderVert);
-                }
-
-                if (outside(next->eleft->origin)) {
-                    beachline::ray outward;
-                    outward.origin = ev.vert;
-                    outward.direction.x = -next->eleft->direction.x;
-                    outward.direction.y = -next->eleft->direction.y;
-
-                    vec2 borderVert = outward.intersectionWithBoundary();
-                    uint32_t index = verts.size();
-                    areas[next->focusIndex].push_back({ ccwDirection(next->focus, borderVert), index });
-                    areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, borderVert), index });
-                    verts.push_back(borderVert);
-                }
-                beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
-                next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
-                uint32_t index = verts.size();
-                verts.push_back(ev.vert);
-                areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
-                areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, ev.vert), index });
-                areas[next->focusIndex].push_back({ ccwDirection(next->focus, ev.vert), index });
+                 if (outside(ev.vert)) {
+                     // TODO: convert this vertex to point inside
+                     beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
+                     next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
+                     uint32_t index = verts.size();
+                     verts.push_back(ev.vert);
+                     areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                     areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, ev.vert), index });
+                     areas[next->focusIndex].push_back({ ccwDirection(next->focus, ev.vert), index });
+                 }
+                 else {
+                     if (outside(prev->eright->origin)) {
+                         beachline::ray outward;
+                         outward.origin = ev.vert;
+                         outward.direction.x = -prev->eright->direction.x;
+                         outward.direction.y = -prev->eright->direction.y;
+                         
+                         vec2 borderVert = outward.intersectionWithBoundary();
+                         uint32_t index = verts.size();
+                         areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, borderVert), index });
+                         areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, borderVert), index });
+                         verts.push_back(borderVert);
+                     }
+                     
+                     if (outside(next->eleft->origin)) {
+                         beachline::ray outward;
+                         outward.origin = ev.vert;
+                         outward.direction.x = -next->eleft->direction.x;
+                         outward.direction.y = -next->eleft->direction.y;
+                         
+                         vec2 borderVert = outward.intersectionWithBoundary();
+                         uint32_t index = verts.size();
+                         areas[next->focusIndex].push_back({ ccwDirection(next->focus, borderVert), index });
+                         areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, borderVert), index });
+                         verts.push_back(borderVert);
+                     }
+                     
+                     beachline::ray newEdge = beachline::verticalBisector(prev->focus, next->focus, ev.vert);
+                     next->eleft = prev->eright = std::make_shared<beachline::ray>(newEdge);
+                     uint32_t index = verts.size();
+                     verts.push_back(ev.vert);
+                     areas[ev.intersection->focusIndex].push_back({ ccwDirection(ev.intersection->focus, ev.vert), index });
+                     areas[prev->focusIndex].push_back({ ccwDirection(prev->focus, ev.vert), index });
+                     areas[next->focusIndex].push_back({ ccwDirection(next->focus, ev.vert), index });
+                 }
                 diag.eraseArc(ev.intersection);
             }
         }
