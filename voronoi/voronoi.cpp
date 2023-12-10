@@ -497,7 +497,7 @@ namespace geom{
         uint32_t vtx = 0;
         for(auto& area: areaI) {
             for(uint32_t idx: area){
-                newV.push_back(areaV[area[idx]]);
+                newV.push_back(areaV[idx]);
                 newI[face].push_back(vtx++);
             }
             face++;
