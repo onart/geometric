@@ -180,6 +180,8 @@ namespace geom{
                 newp.y = ycontext;
                 newp.lowx = newp.highx = newp.focus.x;
                 if(fronts.empty()) { 
+                    newp.lowx = real(-FLT_MAX);
+                    newp.highx = real(FLT_MAX);
                     return fronts.insert(newp).first;
                 }
                 auto it = fronts.upper_bound(newp);
@@ -202,8 +204,16 @@ namespace geom{
                     newp.eright->direction = vec2{real(1.0), slope};
                 }
                 else{ // (almost)equal site y's -> slope vertical
-                    newp.eleft->direction = vec2{0, -1};
-                    newp.eright->direction = vec2{0, -1};
+                    newp.eleft->origin.y = real(-1.0);
+                    newp.eright->origin.y = real(-1.0);
+                    if (newp.focus.x < it->focus.x) {
+                        newp.eleft->direction = vec2{ 0, -1 };
+                        newp.eright->direction = vec2{ 0, 1 };
+                    }
+                    else {
+                        newp.eleft->direction = vec2{ 0, 1 };
+                        newp.eright->direction = vec2{ 0, -1 };
+                    }
                 }
                 parabola splitp(*it);
                 it->highx = newp.lowx;
