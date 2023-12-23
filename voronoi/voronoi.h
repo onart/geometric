@@ -1,3 +1,5 @@
+#ifndef __OA_VORONOI_H__
+#define __OA_VORONOI_H__
 #include <vector>
 #include <cstdint>
 
@@ -20,3 +22,4 @@ namespace geom{
         void makeVertexPerFace();
     };
 }
+#endif
